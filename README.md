@@ -46,9 +46,9 @@ To test the functionality of this script, I used over 200 varying LNK files I ha
 > 
 > `-m`, `--manual`:     Display information about LNK files and their structure
         
-When using the '-o' parameter, the script will automatically detect whether to output the contents into CSV form by reading the output file extension. Therefore, to output in CSV format, please make sure your output file ends with either `.csv` or `.CSV`.
+When using the `-o` parameter, the script will automatically detect whether to output the contents into CSV form by reading the output file extension. Therefore, to output in CSV format, please make sure your output file ends with either `.csv` or `.CSV`.
 
-You can also write the output of multiple arguments to the same output file as this script is set to append data (>>) rather than write to a new file.
+You can also write the output of multiple arguments to the same output file as this script is set to append data rather than write to a new file.
 
 ## EXAMPLES
 
