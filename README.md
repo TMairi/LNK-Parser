@@ -1,4 +1,6 @@
 # LNK-Parser
+
+## ABOUT
 An experimental BASH script which parses out the contents of the data structures found in Windows shortcut (LNK) files.
 
 As a forensic analyst who primarily uses Linux for dissecting files and investigating data, I found that there was a lack of tools available on Linux which would parse a very common artifact of user activity: LNK shortcut files. To remedy this, I decided to create this BASH script, which works at the hexadecimal level to carve out and parse the data structures of LNK files. One of my design goals for this script was to ensure that it could work on most default Linux distributions, meaning there is no over-reliance on unique tools you need to have pre-installed. 
