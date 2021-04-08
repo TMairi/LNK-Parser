@@ -1,0 +1,989 @@
+#!/bin/bash
+
+## Created by: Mairi (tmairi.github.io)
+##
+## LNK-Parser (lnkparser):
+## -----------------------
+##	An experimental BASH script which parses out the contents of the data structures found in 
+##	Windows shortcut (LNK) files. 
+##
+## AUTHOR NOTES:
+## -------------
+##	As a forensic analyst who primarily uses Linux for dissecting files and investigating data,
+##	I found that there was a lack of tools available on Linux which would parse a very common 
+##	artifact of user activity: LNK shortcut files.
+##
+##	To remedy this, I decided to create this BASH script, which works at the hexadecimal level
+##	to carve out and parse the data structures of LNK files. One of my design goals for this 
+##	script was to ensure that it could work on most default Linux distributions, meaning there is
+##	no over-reliance on unique tools you need to have pre-installed. 
+##
+##	To this end, the script primarily takes advantage of the 'xxd' tool to seek and carve out
+##	the LNK data structures. You can review the script below to see exactly how this data is 
+##	stored and how it can be parsed using standard commands such as `awk` and 'sed'.
+##
+##	LNK files are (for the most part) well-documented by Microsoft, and you can find this 
+##	documentation here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink
+##
+##	To test the functionality of this script, I used over 200 varying LNK files I had stored on
+##	numerous HDDs containing Windows Operating Systems ranging from XP to 10. Please be aware
+##	that this script may encounter parsing errors if the input LNK file is corrupted or the data
+##	structures are missing.
+##
+## CHANGELOG:
+## ----------
+##	-- v0.10 (2021-03-26):	Core code written, pseudo-code for parsing functions written
+##	-- v0.11 (2021-03-26): 	Primary functions implemented and tested, fixed user sanitisation
+##	-- v0.12 (2021-03-26): 	Added eight new data structure parsers, all tested and successfully 
+##				parsing with no issues
+##	-- v0.14 (2021-03-27): 	Added more parsers for the target file paths and fixed a null byte 
+##				error in the hex parsing
+##	-- v0.15 (2021-03-27):	Fixed two broken parsers with better hex-reading commands and
+##				made some of the variable names more readable
+##	-- v0.16 (2021-03-27):	Implemented input file header checks for each function and link
+##				flag checks where appropriate
+##	-- v0.20 (2021-03-27):	Implemented parser for extra data and cleaned up several scripts
+##	-- v0.21 (2021-03-27):	Implemented shell data parser for OS version and MS-DOS timestamps
+##	-- v0.22 (2021-03-27):	Added shell data parser for MFT INDX information where available
+##	-- v0.23 (2021-03-28):	Cleaned up the code, added a missing VolumeID parser and fixed an
+##				issue when calculating the target size in MiB
+##	-- v0.25 (2021-03-28):	Added an output data option with CSV support, tested and working
+##				as it should
+##	-- v0.30 (2021-03-28):	Several parsing issues fixed, v0.3 of the experimental script now
+##				achieves all intended functionality without issue
+##	-- v0.31 (2021-04-08):	Hotfix for file deletion output error. Also changed the name of the
+##				output file to be more unique
+##
+## KNOWN ISSUES / FUTURE CHANGES:
+## ------------------------------
+##	This BASH script needs more testing on Network Share LNK files. The single sample I had
+##	for a network share had a corrupt/missing LNK file structure. Therefore, there are no
+##	in-depth parsers for network share-related data yet.
+##
+##	The BASH script does not handle unicode characters well, this needs more testing.
+##
+##	Some of the more targeted scripts could do with streamlining.
+##
+
+###########################################################################################
+## 	DO NOT EDIT THE SCRIPT BEYOND THIS POINT OR YOU MAY BREAK THE PARSERS !!!	 ##
+###########################################################################################
+
+lnkparser_version="Version 0.31"
+
+usage()
+{
+cat <<EOF
+NAME
+	lnkparser - Parse the data contained in LNK files
+	$lnkparser_version
+
+USAGE
+	./lnkparser [-arg/--argument] [LNK FILE] [-o/--output] [OUTPUT FILE]
+
+DESCRIPTION
+
+	An experimental BASH script to read and output the content of LNK data structures
+
+ARGUMENTS:
+
+	-a, --all		Display the data from all defined LNK parsers
+	-H, --header		Verify the header of the LNK file
+        -L, --links		Display the enabled LinkFlags for the LNK file
+	-l, --linkinfo		Display the contents of the LinkInfo structure
+	-A, --attributes	Display the attributes of the target file
+	-t, --timestamps	Display the MAC timestamps of the target file
+	-s, --shell		Display the contents of the shell data (if present)
+	-S, --size		Display the size (in bytes) of the target file
+	-i, --index		Display the Icon Index value
+	-w, --window		Display the Window State of an application launched by the link
+	-k, --key		Display the keystrokes used to launch the application
+	-e, --extra		Display the contents of the ExtraData structure (if present)
+	-o, --output		Write the output to a file (CSV compatible)
+        -v, --version  		Display version number and exit
+        -h, --help      	Display help information and exit
+	-m, --manual		Display information about LNK files and their structure
+	
+	When using the '-o' parameter, the script will automatically detect whether
+	to output the contents into CSV form by reading the output file extension.
+	Therefore, to output in CSV format, please make sure your output file ends
+	with either '.csv' or '.CSV'.
+
+	You can also write the output of multiple arguments to the same output file
+	as this script is set to append data (>>) rather than write to a new file.
+
+EXAMPLES
+
+	To check the validity of the LNK headers:
+        $ ./lnkparser -H file.lnk
+
+	To display the target file MAC timestamps ONLY:
+	$ ./lnkparser --timestamps file.lnk
+
+	To display all available data and write the output to a CSV file:
+	$ ./lnkparser -a file.lnk -o lnk_data.csv
+
+	Display brief information about the LNK structure
+	$ ./lnkparser -m
+
+EOF
+exit 0
+}
+
+function Manual()
+{
+cat <<EOF
+---------------------
+## LNK INFORMATION ##
+---------------------
+
+Windows shortcut files, often called 'LNK' files due to their '.lnk' extension, use the Shell Link Binary 
+file format. LNK files are a data object which contain a link (or a shortcut) to another data object. 
+They are typically used by applications to store a reference to a target file.
+
+According to the official documentation on the Shell Link file format published by Microsoft, the LNK file
+contains a sequence of structures conforming to RFC 5234. Theoretically, the only required structure for an
+LNK file is the SHELL_LINK_HEADER. However, you are much more likely to find the following structures in
+a given LNK file:
+
+	SHELL_LINK_HEADER
+	LINK_TARGET_IDLIST
+	LINK_INFO
+	STRING_DATA
+	EXTRA_DATA
+
+The SHELL_LINK_HEADER contains the file signature, CLSID, the currently set LinkFlags, the target file
+attributes, the target file MAC timestamps, the target file size, the icon index, as well as hot key
+information. This information *should* be available from ALL shortcut files.
+
+The LINK_TARGET_IDLIST is an optional structure, the presence of which is determined by whether or not
+the 'HasLinkTargetIDList' is set in the header flags. This structure is largely undocumented, however
+it has been found to contain shell data, which is useful for forensic analysts.
+
+The LINK_INFO is another optional structure, and according to the documentation; is only present if the 
+'HasLinkInfo' flag is set in the header. However, in my experiments, I have found that the LinkInfo 
+structure can be present even when this flag is not explicitly set in the header. Therefore, this 
+script will treat every LNK file as though the LinkInfo structure is present. This structure contains 
+a wealth of information in the VolumeID, LocalBasePath and the CommonNetworkRelativeLink sections, if 
+they are set (determined by the 'LinkInfoFlags' section at the start of this structure).
+
+The STRING_DATA is a series of zero or more optional structures which are again controlled by various
+flags set in the header. This structure can contain file path and working directory information.
+
+The EXTRA_DATA is another series of optional structures which contain generic data blocks. 
+
+EOF
+exit 0
+}
+
+function error()
+{
+	## Colour variable for fancy error output
+	red='\e[1;31m%s\e[0m\n'
+	
+	printf "$red" "-----------"
+        printf "$red" "## ERROR ##"
+        printf "$red" "-----------"
+	echo
+}
+
+function LNKHeaderCheck()
+{	
+	if [ -z "$1" ]; then
+		error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n"
+		exit 1
+	fi
+
+	file=$1
+	readHeader=$(xxd -e -l4 -u $file | awk '{print $2}' | sed 's|^|0x|')
+	readCLSID=$(xxd -u -e -s4 -l16 $file | awk '{print $2,$3,$4,$5}' | sed 's| |-|g')
+
+	if [ "$readHeader" == "0x0000004C" ] && [ "$readCLSID" == "00021401-00000000-000000C0-46000000" ]; then
+        	printf "LNK Header Check:\t\t## VALID ##\n"
+		printf "Class Identifier:\t\t## VALID ##\n"
+	else
+		error
+        	printf "LNK Header Check:\t\t## INVALID ##\n"
+		printf "Class Identifier:\t\t## INVALID ##\n"
+		exit 1
+	fi
+}
+
+function LinkFlags()
+{	
+	if [ -z "$1" ]; then
+		error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n"	
+		exit 1
+	fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+	file=$1
+	flagbits=$(xxd -b -s20 -l4 $file | awk '{print $2,$3,$4,$5}' | sed 's| ||g')
+	flagarray=("HasLinkTargetIDList" "HasLinkInfo" "HasName" "HasRelativePath" "HasWorkingDir" "HasArguments" "HasIconLocation" "IsUnicode" "ForceNoLinkInfo" "HasExpString" "RunInSeparateProcess" "Unused1" "HasDarwinID" "RunAsUser" "HasExpIcon" "NoPidlAlias" "Unused2" "RunWithShimLayer" "ForceNoLinkTrack" "EnableTargetMetadata" "DisableLinkPathTracking" "DisableKnownFolderTracking" "DisableKnownFolderAlias" "AllowLinkToLink" "UnaliasOnSave" "PreferEnvironmentPath" "KeepLocalIDListForUNCTarget" "<NOT DEFINED>" "<NOT DEFINED>" "<NOT DEFINED>" "<NOT DEFINED>" "<NOT DEFINED>")
+	bitsanitise=$(echo "$flagbits" | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}')
+	bitarray=($bitsanitise)
+
+	## Really unsophisticated for loop to compare array bit values to their corresponding array flag values if the bit is "1"
+	for index in ${!bitarray[@]}
+	do
+		bit=${bitarray[$index]}
+		flag=${flagarray[$index]}
+		if [ $bit == 1 ]; then
+			printf "Shell Link Structure:\t\t$flag\n"
+		fi
+	done
+}
+
+function FileAttributes()
+{
+	if [ -z "$1" ]; then
+		error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n"	
+		exit 1
+	fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+	file=$1
+	attributebits=$(xxd -b -s24 -l4 $file | awk '{print $2,$3}' | rev | awk '{print $2,$1}' | sed 's| ||' | cut -c 1-15)
+	attributearray=("FILE_ATTRIBUTE_READONLY" "FILE_ATTRIBUTE_HIDDEN" "FILE_ATTRIBUTE_SYSTEM" "Reserved1" "FILE_ATTRIBUTE_DIRECTORY" "FILE_ATTRIBUTE_ARCHIVE" "Reserved2" "FILE_ATTRIBUTE_NORMAL" "FILE_ATTRIBUTE_TEMPORARY" "FILE_ATTRIBUTE_SPARSE_FILE" "FILE_ATTRIBUTE_REPARSE_POINT" "FILE_ATTRIBUTE_COMPRESSED" "FILE_ATTRIBUTE_OFFLINE" "FILE_ATTRIBUTE_NOT_CONTENT_INDEXED" "FILE_ATTRIBUTE_ENCRYPTED")
+	attributesanitise=$(echo "$attributebits" | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}')
+	attrbitarray=($attributesanitise)
+
+	for index in ${!attrbitarray[@]}
+        do
+                bit=${attrbitarray[$index]}
+                attribute=${attributearray[$index]}
+                if [ $bit == 1 ]; then
+			printf "Target File Attribute:\t\t$attribute\n"
+                fi
+        done
+}
+
+function Timestamps()
+{
+        if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n"	
+                exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+	## Variable calculating the difference between FILETIME and Unix epochs (1601-01-01 to 1970-01-01 in days, converted to seconds)
+	timestampoffset=$((134774*24*60*60))
+        file=$1
+
+	## All timestamps parsed as filetime, converted to unix time, then to a human-readable time (in the superior ISO 8601 format of course)
+	ctimehex=$(xxd -u -e -s28 -l8 $file | awk '{print $3,$2}' | sed 's| ||')
+	cfiletime=$(echo -n "$ctimehex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	cunixtime=$(($cfiletime/10000000-$timestampoffset))
+	ctime=$(date -d@$cunixtime +'%Y-%m-%d %H:%M:%S.%N %Z')
+
+	atimehex=$(xxd -u -e -s36 -l8 $file | awk '{print $3,$2}' | sed 's| ||')
+	afiletime=$(echo -n "$atimehex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	aunixtime=$(($afiletime/10000000-$timestampoffset))
+	atime=$(date -d@$aunixtime +'%Y-%m-%d %H:%M:%S.%N %Z')
+
+	mtimehex=$(xxd -u -e -s44 -l8 $file | awk '{print $3,$2}' | sed 's| ||')
+	mfiletime=$(echo -n "$mtimehex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	munixtime=$(($mfiletime/10000000-$timestampoffset))
+	mtime=$(date -d@$munixtime +'%Y-%m-%d %H:%M:%S.%N %Z')
+
+	printf "Target (M)odified Timestamp:\t$mtime\n"
+	printf "Target (A)ccessed Timestamp:\t$atime\n"
+	printf "Target (C)reation Timestamp:\t$ctime\n"
+
+}
+
+function FileSize()
+{
+	if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+                exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	## Simple parser for calculating the target file size, I also convert it to MiB (the binary unit, NOT the SI unit MB) for readability
+	hexsize=$(xxd -u -e -s52 -l4 $file | awk '{print $2}')
+	bytesize=$(echo -n "$hexsize" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## Normally, BASH will not allow non-integer calculations, so I am using fixed decimal logic to get around having to use a tool such as 'bc'
+	mibcalc=$(echo $(($bytesize/1048576)))
+	mibdecimal=$(tail -c 5 <<< $((${bytesize}0000/1048576)))
+	mibsize=$mibcalc.$mibdecimal
+
+	printf "Target File Size (bytes):\t$bytesize\n"
+	printf "Target File Size (MiB):\t\t%f\n" $mibsize
+}
+
+function IconIndex()
+{
+	if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+                exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	## Simple parser for the IconIndex, based on its known offset
+	iconhex=$(xxd -u -e -s56 -l4 $file | awk '{print $2}')
+	icondec=$(echo -n "$icondec" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	printf "Icon Index Value:\t\t$icondec\n"
+}
+
+function WindowState()
+{
+	if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+                exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	## Simple parser for the known offset for WindowState, this would have been better as a case statement, but I like typing 'elif'
+	winvalue=$(xxd -u -ps -s60 -l1 $file)
+	
+	if [ "$winvalue" == "00" ]; then	
+		printf "Application Window State:\t$winvalue (SW_HIDE)\n"          
+	elif [ "$winvalue" == "01" ]; then	
+		printf "Application Window State:\t$winvalue (SW_NORMAL)\n"         
+	elif [ "$winvalue" == "02" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOWMINIMIZED)\n"        
+	elif [ "$winvalue" == "03" ]; then
+		printf "Application Window State:\t$winvalue (SW_MAXIMIZE)\n"
+	elif [ "$winvalue" == "04" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOWNOACTIVATE)\n"      
+	elif [ "$winvalue" == "05" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOW)\n"
+	elif [ "$winvalue" == "06" ]; then
+		printf "Application Window State:\t$winvalue (SW_MINIMIZE)\n"    
+	elif [ "$winvalue" == "07" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOWMINNOACTIVE)\n"
+	elif [ "$winvalue" == "08" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOWNA)\n"
+	elif [ "$winvalue" == "09" ]; then
+		printf "Application Window State:\t$winvalue (SW_RESTORE)\n"
+	elif [ "$winvalue" == "10" ]; then
+		printf "Application Window State:\t$winvalue (SW_SHOWDEFAULT)\n"
+	elif [ "$winvalue" == "11" ]; then
+		printf "Application Window State:\t$winvalue (SW_FORCEMINIMIZE)\n"
+	else
+		printf "Application Window State:\t$winvalue (## NOT KNOWN ##)\n"
+	fi
+}
+
+function HotKey()
+{
+	if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+                exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	## I differentiate between the low and high bytes as per the official documentation for this field
+	lowbyte=$(xxd -u -ps -s64 -l1 $file)
+	highbyte=$(xxd -u -ps -s65 -l1 $file)
+
+	## Function keys are omitted because I did not have time to add them
+	case "$lowbyte" in
+		00)	printf "Hot-Key Reference Code:\t\t$lowbyte (No Key Assigned)\n"
+			;;
+		30)	printf "Hot-Key Reference Code:\t\t$lowbyte (0 Key)\n"	
+			;;
+		31)	printf "Hot-Key Reference Code:\t\t$lowbyte (1 Key)\n"
+			;;
+		32)	printf "Hot-Key Reference Code:\t\t$lowbyte (2 Key)\n"
+			;;
+		33)	printf "Hot-Key Reference Code:\t\t$lowbyte (3 Key)\n"
+			;;
+		34)	printf "hot-Key Reference Code:\t\t$lowbyte (4 Key)\n"
+			;;
+		35)	printf "Hot-Key Reference Code:\t\t$lowbyte (5 Key)\n"
+			;;
+		36)	printf "Hot-Key Reference Code:\t\t$lowbyte (6 Key)\n"
+			;;
+		37)	printf "Hot-Key Reference Code:\t\t$lowbyte (7 Key)\n"
+			;;
+		38)	printf "Hot-Key Reference Code:\t\t$lowbyte (8 Key)\n"
+			;;
+		39)	printf "Hot-Key Reference Code:\t\t$lowbyte (9 Key)\n"
+			;;
+		41)	printf "Hot-Key Reference Code:\t\t$lowbyte (A Key)\n"
+			;;
+		42)	printf "Hot-Key Reference Code:\t\t$lowbyte (B Key)\n"
+			;;
+		43)	printf "Hot-Key Reference Code:\t\t$lowbyte (C Key)\n"
+			;;
+		44)	printf "Hot-Key Reference Code:\t\t$lowbyte (D Key)\n"
+			;;
+		45)	printf "Hot-Key Reference Code:\t\t$lowbyte (E Key)\n"
+			;;
+		46)	printf "Hot-Key Reference Code:\t\t$lowbyte (F Key)\n"
+			;;
+		47)	printf "Hot-Key Reference Code:\t\t$lowbyte (G Key)\n"
+			;;
+		48)	printf "Hot-Key Reference Code:\t\t$lowbyte (H Key)\n"
+			;;
+		49)	printf "Hot-Key Reference Code:\t\t$lowbyte (I Key)\n"
+			;;
+		4A)	printf "Hot-Key Reference Code:\t\t$lowbyte (J Key)\n"
+			;;
+		4B)	printf "Hot-Key Reference Code:\t\t$lowbyte (K Key)\n"
+			;;
+		4C)	printf "Hot-Key Reference Code:\t\t$lowbyte (L Key)\n"
+			;;
+		4D)	printf "Hot-Key Reference Code:\t\t$lowbyte (M Key)\n"
+			;;
+		4E)	printf "Hot-Key Reference Code:\t\t$lowbyte (N Key)\n"
+			;;
+		4F)	printf "Hot-Key Reference Code:\t\t$lowbyte (O Key)\n"
+			;;
+		50)	printf "Hot-Key Reference Code:\t\t$lowbyte (P Key)\n"
+			;;
+		51)	printf "Hot-Key Reference Code:\t\t$lowbyte (Q Key)\n"
+			;;
+		52)	printf "Hot-Key Reference Code:\t\t$lowbyte (R Key)\n"
+			;;
+		53)	printf "Hot-Key Reference Code:\t\t$lowbyte (S Key)\n"
+			;;
+		54)	printf "Hot-Key Reference Code:\t\t$lowbyte (T Key)\n"
+			;;
+		55)	printf "Hot-Key Reference Code:\t\t$lowbyte (U Key)\n"
+			;;
+		56)	printf "Hot-Key Reference Code:\t\t$lowbyte (V Key)\n"
+			;;
+		57)	printf "Hot-Key Reference Code:\t\t$lowbyte (W Key)\n"
+			;;
+		58)	printf "Hot-Key Reference Code:\t\t$lowbyte (X Key)\n"
+			;;
+		59)	printf "Hot-Key Reference Code:\t\t$lowbyte (Y Key)\n"
+			;;
+		5A)	printf "Hot-Key Reference Code:\t\t$lowbyte (Z Key)\n"
+			;;
+		*)	printf "Hot-Key Reference Code:\t\t$lowbyte (## NOT KNOWN ##)\n"
+			;;
+	esac
+
+	case "$highbyte" in
+		00)	printf "Keyboard Modifier Code:\t\t$highbyte (No Modifier Key Set)\n"
+			;;
+		01)	printf "Keyboard Modifier Code:\t\t$highbyte (SHIFT Modifier Key Set)\n"
+			;;
+		02)	printf "Keyboard Modifier Code:\t\t$highbyte (CTRL Modifier Key Set)\n"
+			;;
+		04)	printf "Keyboard Modifier Code:\t\t$highbyte (ALT Modifier Key Set)\n"
+			;;
+		06)	printf "Keyboard Modifier Code:\t\t$highbyte (CTRL + ALT Modifier Key Set)\n"
+			;;
+		*)	printf "Keyboard Modifier Code:\t\t$highbyte (## NOT KNOWN ##)\n"
+			;;
+	esac
+}
+
+function LinkInfoParse()
+{
+	if [ -z "$1" ]; then
+        	error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+        	exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	## Calculate the size of the variable TargetIDList structure to skip it when passing byte values to xxd
+	Targetidlisthex=$(xxd -u -e -s76 -l2 $file | awk '{print $2}')
+	idlistbytes=$(echo -n "$Targetidlisthex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## LinkInfo structure size in hex, used for debugging atm
+	loffset=$(echo $((78+$idlistbytes)))
+	linkinfosizehex=$(xxd -u -e -s$loffset -l4 $file | awk '{print $1,$2}')
+
+	## LinknInfo header offset and size in hex, used in if statement later
+	hoffset=$(echo $((78+$idlistbytes+4)))
+	lheaderhex=$(xxd -u -e -s$hoffset -l4 $file | awk '{print $2}')
+
+	## LinkInfo Flags offset and binary converstion, used in if statement later
+	foffset=$(echo $((78+$idlistbytes+4+4)))
+	lflagsbin=$(xxd -b -s$foffset -l4 $file | awk '{print $2}' | rev)
+
+	## Calculate the value of the VolumeIDOffset field in the LinkInfo structure into bytes, used for next calculation
+	voffset=$(echo $((78+$idlistbytes+4+4+4)))
+	vidoffhex=$(xxd -u -e -s$voffset -l4 $file | awk '{print $2}')
+	vidoffbyte=$(echo -n "$vidoffhex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## Find the start of the VolumeID structure for parsing and calculate its size, used for later calculations
+	volumeidstart=$(echo $((78+$idlistbytes+$vidoffbyte)))
+	volumeidsizehex=$(xxd -u -e -s$volumeidstart -l4 $file | awk '{print $2}')
+	volumeidsizebyte=$(echo -n "$volumeidsizehex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## Parse the DriveType field from VolumeID
+	viddrivetype=$(echo $((78+$idlistbytes+$vidoffbyte+4)))
+	viddrivetypehex=$(xxd -u -e -s$viddrivetype -l4 $file | awk '{print $2}')
+
+	## Parse the DriveSerialNumber field from VolumeID
+	viddriveserial=$(echo $((78+$idlistbytes+$vidoffbyte+4+4)))
+	viddriveserialhex=$(xxd -u -e -s$viddriveserial -l4 $file | awk '{print $2}')
+
+	## Parse the Volume Label
+	vollabstart=$(echo $((78+$idlistbytes+$vidoffbyte+4+4+4)))
+	vollaboffset=$(xxd -u -e -s$vollabstart -l4 $file | awk '{print $2}')
+	vollabdec=$(echo -n "$vollaboffset" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	volumelabel=$(echo $(($volumeidstart+$vollabdec)))
+	vollablengthchar=$(xxd -u -ps -s$volumelabel $file | cut -d" " -f2-9 | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | awk -F'00' '{print $1}' | sed 's| ||g' | wc -m)
+	vollablengthbyte=$(echo $(($vollablengthchar/2)))
+	volumelabelstring=$(xxd -u -ps -s$volumelabel -l$vollablengthbyte $file)
+	volumelabelascii=$(echo -n "$volumelabelstring" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+
+	## Read the starting offset of the LocalBasePath field
+	boffset=$(echo $((78+$idlistbytes+4+4+4+4)))
+	lbpoffhex=$(xxd -u -e -s$boffset -l4 $file | awk '{print $2}')
+	lbpoffbyte=$(echo -n "$lbpoffhex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## Calculate the exact unique starting byte value needed to parse LocalBasePath
+	basepathstart=$(echo $((78+$idlistbytes+$lbpoffbyte)))
+
+	## Super-hacky way of calculating the length of the LocalBasePath field by finding the NULL terminated string then translating it to bytes
+	basepathlengthchar=$(xxd -s$basepathstart $file | cut -d" " -f2-9 | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | awk -F'00' '{print $1}' | sed 's| ||g' | wc -m)
+	basepathlengthbyte=$(echo $(($basepathlengthchar/2)))
+
+	## Parse out the target file path from LocalBasePath
+	filepathhex=$(xxd -ps -u -s$basepathstart -l$basepathlengthbyte $file | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | sed 's| ||g' | sed 's|00||g')
+	filepathascii=$(echo -n "$filepathhex" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+
+	## Parse out the relative path character count
+	rpcountstart=$(echo $(($basepathstart+$basepathlengthbyte+2)))
+	rpcounthex=$(xxd -u -e -s$rpcountstart -l2 $file | awk '{print $2}')
+	rpcountvalue=$(echo -n "$rpcounthex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+
+	## The byte value needs to be doubled to account for the NULL bytes
+	rpcountdouble=$(echo $(($rpcountvalue*2)))
+
+	relativepathstart=$(echo $(($basepathstart+$basepathlengthbyte+3)))
+	relativepathhex=$(xxd -ps -u -s$relativepathstart -l$rpcountdouble $file | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | sed 's| ||g' | sed 's|00||g')
+	relativepathascii=$(echo -n "$relativepathhex" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+
+	wdcountstart=$(echo $(($relativepathstart+$rpcountdouble+1)))
+	wdcounthex=$(xxd -u -e -s$wdcountstart -l2 $file | awk '{print $2}')
+	wdcountvalue=$(echo -n "$wdcounthex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	wdcountdouble=$(echo $(($wdcountvalue*2)))	
+
+	workingdirstart=$(echo $(($wdcountstart+2)))
+	workingdirhex=$(xxd -ps -u -s$workingdirstart -l$wdcountdouble $file | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | sed 's| ||g' | sed 's|00||g')
+	workingdirascii=$(echo -n "$workingdirhex" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+
+	## Variables for Working Dir without Relative Path
+	wdonlystart=$(echo $(($basepathstart+$basepathlengthbyte+2)))
+	wdonlycounthex=$(xxd -u -e -s$wdonlystart -l2 $file | awk '{print $2}')
+	wdonlycountvalue=$(echo -n "$wdonlycounthex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g')
+	wdonlycountdouble=$(echo $(($wdonlycountvalue*2)))	
+
+	workingdironlystart=$(echo $(($wdonlystart+2)))
+	workingdironlyhex=$(xxd -ps -u -s$workingdironlystart -l$wdonlycountdouble $file | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | sed 's| ||g' | sed 's|00||g')
+	workingdironlyascii=$(echo -n "$workingdironlyhex" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+	
+	if [ "$lflagsbin" == "10000000" ]; then
+		printf "Detected LinkInfo Flags:\tVolumeID & LocalBasePath\n"
+		echo
+		printf "Target Drive Serial Number:\t$viddriveserialhex\n"
+		if [ "$vollaboffset" == "00000014" ] || [ -z "$volumelabelascii" ]; then
+			printf "Target Volume Label:\t\t## NOT DEFINED ##\n"
+		else
+			printf "Target Volume Label:\t\t$volumelabelascii\n"
+		fi
+	elif [ "$lflagsbin" == "01000000" ]; then
+		printf "Detected LinkInfo Flags:\tCommonNetworkRelativeLink\n"
+		echo
+	elif [ "$lflagsbin" == "11000000" ]; then
+		printf "Detected LinkInfo Flags:\tVolumeID, LocalBasePath & CommonNetorkRelativeLink\n"
+		echo
+		printf "Target Drive Serial Number:\t$viddriveserialhex\n"
+		if [ "$vollaboffset" == "00000014" ] || [ -z "$volumelabelascii" ]; then
+			printf "Target Volume Label:\t\t## NOT DEFINED ##\n"
+		else
+			printf "Target Volume Label:\t\t$volumelabelascii\n"
+		fi
+	else
+		printf "Detected LinkInfo Flags:\t## NOT DEFINED ## ($lflagsbin)\n"
+		echo
+	fi
+
+	if [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000000" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_UNKNOWN (Drive type cannot be determined)\n"
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000001" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_NO_ROOT_DIR (Root path is invalid)\n"	
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000002" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_REMOVABLE (Drive has removable media)\n"	
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000003" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_FIXED (Drive has fixed media)\n"	
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000004" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_REMOTE (Drive is a network drive)\n"	
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000005" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_CD_ROM (Drive is a CD-ROM)\n"	
+	elif [ "$lflagsbin" == "10000000" ] && [ "$viddrivetypehex" == "00000006" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_RAMDISK (Drive is a RAM disk)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000000" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_UNKNOWN (Drive type cannot be determined)\n"
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000001" ]; then
+		printf "Tragte Link Drive Type:\t\t$viddrivetypehex - DRIVE_NO_ROOT_DIR (Root path is invalid)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000002" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_REMOVABLE (Drive has removable media)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000003" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_FIXED (Drive has fixed media)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000004" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_REMOTE (Drive is a network drive)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000005" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_CD_ROM (Drive is a CD-ROM)\n"	
+	elif [ "$lflagsbin" == "11000000" ] && [ "$viddrivetypehex" == "00000006" ]; then
+		printf "Target Link Drive Type:\t\t$viddrivetypehex - DRIVE_RAMDISK (Drive is a RAM disk)\n"	
+	else
+		printf "Target Link Drive Type:\t\t## NOT DEFINED ##\n"
+	fi
+
+	## I have to echo the target file path string otherwise printf will complain...
+
+	if [ -z "$filepathascii" ]; then
+		echo
+		printf "Target Link File Path:\t\t## NOT DEFINED ##\n"
+	else
+		echo
+		echo "Target Link File Path:		$filepathascii"
+	fi
+
+	flagtest=$(LinkFlags $file)
+
+	if [[ "$flagtest" == *"HasRelativePath"* ]] && [[ "$flagtest" == *"HasWorkingDir"* ]]; then
+		echo "Relative File Path:		$relativepathascii"
+		echo "Working Directory: 		$workingdirascii"
+	elif [[ "$flagtest" == *"HasRelativePath"* ]] && [[ "$flagtest" != *"HasWorkingDir"* ]]; then
+		echo "Relative File Path:		$relativepathascii"
+		echo "Working Directory:		## NOT DEFINED IN LINK HEADER ##"
+	elif [[ "$flagtest" != *"HasRelativePath"* ]] && [[ "$flagtest" == *"HasWorkingDir"* ]]; then
+		echo "Relative File Path:		## NOT DEFINED IN LINK HEADER ##"
+		echo "Working Directory:		$workingdironlyascii"
+	else
+		echo "Relative File Path:		## NOT DEFINED IN LINK HEADER ##"
+		echo "Working Directory:		## NOT DEFINED IN LINK HEADER ##"
+	fi
+}
+
+function ExtraData()
+{
+	if [ -z "$1" ]; then
+        	error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+        	exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+
+	trackerdatastart=$(xxd -ps -u $file | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}' | sed 's| ||g' | cut -d" " -f2-9 | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | awk -F'060000000030000A' '{print $1}' | sed 's| ||g' | wc -m)
+	trackerdatafix=$(echo $(($trackerdatastart/2)))
+	tdblocksize=$(xxd -u -e -s$trackerdatafix -l4 $file | awk '{print $2}')
+
+	tdblocksigstart=$(echo $(($trackerdatafix+4)))
+	tdblocksignature=$(xxd -u -e -s$tdblocksigstart -l4 $file | awk '{print $2}')
+
+	machineidstart=$(echo $(($trackerdatafix+16)))
+	machineidhex=$(xxd -u -ps -s$machineidstart -l16 $file | sed 's|00||g')
+	machineidascii=$(echo -n "$machineidhex" | sed 's|0x||g'| sed 's| ||g' | sed 's|\(.\{2\}\)|\\x&|g' | sed 's|\(.*\)|"\1"|g' | xargs echo -e)
+
+	if [ "$tdblocksignature" == "A0000003" ] && [ ! -z "$machineidascii" ]; then	
+		printf "Machine ID (NetBIOS Name):\t$machineidascii\n"
+	else
+		printf "Extra Data:\t\t\t## NOT DEFINED ##\n"
+	fi
+}
+
+function ShellItems()
+{
+	if [ -z "$1" ]; then
+        	error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+        	exit 1
+        fi
+
+	lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+	if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+		error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+		exit 1
+	fi
+
+        file=$1
+	
+	idlistflagcheck=$(LinkFlags $file)
+	if [[ "$idlistflagcheck" != *"HasLinkTargetIDList"* ]]; then
+		error
+		printf "Input file does not contain an IDList structure\n"
+		printf "Run './lnkparser -L <FILE> to check which LinkFlags are set\n'"
+		exit 1
+	fi
+
+	fileentrystart=$(xxd -ps -u $file | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}' | sed 's| ||g' | cut -d" " -f2-9 | awk -v d=" " '{s=(NR==1?s:s d)$0}END{print s}' | awk -F'0400EFBE' '{print $1}' | sed 's| ||g' | wc -m)
+	fileentryfix=$(echo $(($fileentrystart/2)))
+
+	fileentrysignature=$(xxd -u -e -s$fileentryfix -l4 $file | awk '{print $2}')
+	if [[ "$fileentrysignature" != "BEEF0004"  ]]; then
+		printf "Shell Item Data:\t\t## NOT FOUND ##\n"
+		exit 1
+	fi
+
+	extensionversionbyte=$(echo $(($fileentryfix-2)))
+	extensionversion=$(xxd -u -e -s$extensionversionbyte -l2 $file | awk '{print $2}')
+	
+	case "$extensionversion" in
+                0003)	printf "Operation System Version:\tWindows XP or 2003\n"
+			echo
+                        ;;
+		0007)	printf "Operating System Version:\tWindows Vista (SP0)\n"
+			echo
+			;;
+		0008)	printf "Operating System Version:\tWindows 2008, 7 or 8.0\n"
+			echo
+			;;
+		0009)	printf "Operating System Version:\tWindows 8.1 or 10\n"
+			echo
+			;;
+                *)      printf "Operating System Version:\t## NOT KNOWN ##\n"
+			echo
+                        ;;
+        esac
+
+	mftdatastart=$(echo $(($fileentryfix+16)))
+	mftentryindex=$(for hex in $(xxd -u -e -s$mftdatastart -l6 $file | awk '{print $2}'); do echo -n "$hex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g'; done)
+	mftseqstart=$(echo $(($fileentryfix+22)))
+	mftseqnumber=$(for hex in $(xxd -u -e -s$mftseqstart -l2 $file | awk '{print $2}'); do echo -n "$hex" | sed 's|0x||g' | sed 's| ||g' | sed 's|^|0x|' | xargs printf "%f\n" | sed 's|\..*||g'; done)
+
+	if [[ "$extensionversion" == "0003" ]]; then
+		printf "MFT INDX Entry Number:\t\t## NOT AVAILABLE ON THIS OS VERSION ##\n"
+		printf "MFT Sequence Number:\t\t## NOT AVAILABLE ON THIS OS VERSION ##\n"
+		echo
+	else
+		printf "MFT INDX Entry Number:\t\t$mftentryindex\n"
+		printf "MFT Sequence Number:\t\t$mftseqnumber\n"
+		echo
+	fi
+
+	## Iteration through the binary shell data to parse the MS-DOS create/access timestamps out (according to MS documentation)
+	fatcreatebinstart=$(echo $(($fileentryfix+4)))
+	fatcreatebin=$(xxd -b -s$fatcreatebinstart -l4 $file | awk '{print $5,$4,$3,$2}' | sed 's| ||g' | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}')
+	fatcreateD=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $28,$29,$30,$31,$32}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+	fatcreateM=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $24,$25,$26,$27}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+	fatcreateY=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $17,$18,$19,$20,$21,$22,$23}' | sed 's| ||g'); do echo "$((2#$bin+1980))"; done)
+	fatcreates=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $12,$13,$14,$15,$16}' | sed 's| ||g'); do echo "$((2#$bin*2))"; done)
+	fatcreatem=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $6,$7,$8,$9,$10,$11}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+	fatcreateh=$(for bin in $(echo -n "$fatcreatebin" | awk -F " " '{print $1,$2,$3,$4,$5}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+
+	fataccessbinstart=$(echo $(($fileentryfix+8)))
+	fataccessbin=$(xxd -b -s$fataccessbinstart -l4 $file | awk '{print $5,$4,$3,$2}' | sed 's| ||g' | awk -v FS="" '{for (i=1;i<=NF;i++) printf $i" "}')
+	fataccessD=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $28,$29,$30,$31,$32}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+        fataccessM=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $24,$25,$26,$27}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+        fataccessY=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $17,$18,$19,$20,$21,$22,$23}' | sed 's| ||g'); do echo "$((2#$bin+1980))"; done)
+        fataccesss=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $12,$13,$14,$15,$16}' | sed 's| ||g'); do echo "$((2#$bin*2))"; done)
+        fataccessm=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $6,$7,$8,$9,$10,$11}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+        fataccessh=$(for bin in $(echo -n "$fataccessbin" | awk -F " " '{print $1,$2,$3,$4,$5}' | sed 's| ||g'); do echo "$((2#$bin))"; done)
+
+	printf "MS-DOS Accessed Timestamp:\t%d-%02d-%02d %02d:%02d:%02d\n" $fataccessY $fataccessM $fataccessD $fataccessh $fataccessm $fataccesss
+	printf "MS-DOS Creation Timestamp:\t%d-%02d-%02d %02d:%02d:%02d\n" $fatcreateY $fatcreateM $fatcreateD $fatcreateh $fatcreatem $fatcreates
+}
+
+function AllData()
+{
+	if [ -z "$1" ]; then
+                error
+		printf "Please specify an input file\n"
+		printf "Run './lnkparser -h' for detailed usage information \n" 
+                exit 1
+        fi
+
+        lnkheadercheck=$(LNKHeaderCheck $1 | grep -v Error)
+        if [[ "$lnkheadercheck" == *"INVALID"* ]]; then
+                error
+		printf "Input file is not a valid LNK file\n"
+		printf "Run './lnkparser -H' to check the validity of the input file\n"
+                exit 1
+        fi
+
+        file=$1
+	LNKHeaderCheck $file
+	echo
+	LinkFlags $file
+	echo
+	FileAttributes $file
+	echo
+	Timestamps $file
+	echo
+	FileSize $file
+	echo
+	IconIndex $file
+	echo
+	WindowState $file
+	echo
+	HotKey $file
+	echo
+	LinkInfoParse $file
+	echo
+	ExtraData $file
+	echo
+	ShellItems $file
+	echo
+}
+
+if [ -z "$1" ]; then
+	error
+        printf "Please specify an argument\n" 
+	printf "Run './lnkparser -h' for detailed usage information \n" 
+	exit 1
+fi
+
+case "$1" in
+	-a|--all)		AllData $2 | tee lnkparser-tmpfile.txt
+				;;
+        -H|--header)		LNKHeaderCheck $2 | tee lnkparser-tmpfile.txt
+        			;;
+	-L|--links)		LinkFlags $2 | tee lnkparser-tmpfile.txt
+				;;
+	-A|--attributes)	FileAttributes $2 | tee lnkparser-tmpfile.txt
+				;;
+	-t|--timestamps)	Timestamps $2 | tee lnkparser-tmpfile.txt
+				;;
+	-S|--size)		FileSize $2 | tee lnkparser-tmpfile.txt
+				;;
+	-i|--index)		IconIndex $2 | tee lnkparser-tmpfile.txt
+				;;
+	-w|--window)		WindowState $2 | tee lnkparser-tmpfile.txt
+				;;
+	-k|--key)		HotKey $2 | tee lnkparser-tmpfile.txt
+				;;
+	-l|--linkinfo)		LinkInfoParse $2 | tee lnkparser-tmpfile.txt
+				;;
+	-e|--extra)		ExtraData $2 | tee lnkparser-tmpfile.txt
+				;;
+	-s|--shell)		ShellItems $2 | tee lnkparser-tmpfile.txt
+				;;
+	-v|--version)  		echo $lnkparser_version
+                        	;;
+        -h|--help)      	usage
+                        	;;
+	-m|--manual)		Manual
+				;;
+        *)              	usage
+                        	;;
+esac
+
+## Horrible way of redirecting output but this was the only way I could get it to manipulate the STDOUT of the functions
+if [ -z "$3" ]; then
+	rm lnkparser-tmpfile.txt 2>/dev/null
+fi
+
+case "$3" in
+	-o|--output)		if [ -z "$4" ]; then
+			                error
+					printf "Please specify an output file\n"
+					printf "Run './lnkparser -h' for detailed usage information \n" 
+					rm lnkparser-tmpfile.txt 2>/dev/null
+                			exit 1
+				elif [[ "$4" == *".csv"* ]] || [[ "$4" == *".CSV"* ]]; then
+					outfile=$4
+					cat lnkparser-tmpfile.txt | tr "\\t" "," | sed 's|,,|,|' | sed 's|,,,|,|' | sed '/^[[:space:]]*$/d' >> $outfile
+					rm lnkparser-tmpfile.txt 2>/dev/null
+					exit 0
+				else	
+					outfile=$4
+					cat lnkparser-tmpfile.txt >> $outfile
+					rm lnkparser-tmpfile.txt 2>/dev/null
+					exit 0
+				fi
+				;;
+	*)			rm lnkparser-tmpfile.txt 2>/dev/null
+				exit 0
+				;;
+esac
