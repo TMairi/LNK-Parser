@@ -13,7 +13,9 @@ To test the functionality of this script, I used over 200 varying LNK files I ha
 ## ARGUMENTS
 
 > `-a`, `--all`:        Display the data from all defined LNK parsers
+> 
 > `-H`, `--header`:     Verify the header of the LNK file
+> 
 > `-L`, `--links`:      Display the enabled LinkFlags for the LNK file
 > `-l`, `--linkinfo`:   Display the contents of the LinkInfo structure
 > `-A`, `--attributes`: Display the attributes of the target file
