@@ -17,18 +17,31 @@ To test the functionality of this script, I used over 200 varying LNK files I ha
 > `-H`, `--header`:     Verify the header of the LNK file
 > 
 > `-L`, `--links`:      Display the enabled LinkFlags for the LNK file
+> 
 > `-l`, `--linkinfo`:   Display the contents of the LinkInfo structure
+> 
 > `-A`, `--attributes`: Display the attributes of the target file
+> 
 > `-t`, `--timestamps`: Display the MAC timestamps of the target file
+> 
 > `-s`, `--shell`:      Display the contents of the shell data (if present)
+> 
 > `-S`, `--size`:       Display the size (in bytes) of the target file
+> 
 > `-i`, `--index`:      Display the Icon Index value
+> 
 > `-w`, `--window`:     Display the Window State of an application launched by the link
+> 
 > `-k`, `--key`:        Display the keystrokes used to launch the application
+> 
 > `-e`, `--extra`:      Display the contents of the ExtraData structure (if present)
+> 
 > `-o`, `--output`:     Write the output to a file (CSV compatible)
+> 
 > `-v`, `--version`:    Display version number and exit
+> 
 > `-h`, `--help`:       Display help information and exit
+> 
 > `-m`, `--manual`:     Display information about LNK files and their structure
         
 When using the '-o' parameter, the script will automatically detect whether to output the contents into CSV form by reading the output file extension. Therefore, to output in CSV format, please make sure your output file ends with either `.csv` or `.CSV`.
