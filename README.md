@@ -10,7 +10,9 @@ To this end, the script primarily takes advantage of the `xxd` tool to seek and 
 To test the functionality of this script, I used over 200 varying LNK files I had stored on numerous HDDs containing Windows Operating Systems ranging from XP to 10. Please be aware that this script may encounter parsing errors if the input LNK file is corrupted or the data structures are missing.
 
 ## USAGE
-`./lnkparser [-arg/--argument] [LNK FILE] [-o/--output] [OUTPUT FILE]`
+```plaintext
+./lnkparser [-arg/--argument] [LNK FILE] [-o/--output] [OUTPUT FILE]
+```
 
 ## ARGUMENTS
 
@@ -38,16 +40,24 @@ You can also write the output of multiple arguments to the same output file as t
 ## EXAMPLES
 
 To check the validity of the LNK headers:
-`$ ./lnkparser -H file.lnk`
+```plaintext
+$ ./lnkparser -H file.lnk
+```
 
 To display the target file MAC timestamps ONLY:
-`$ ./lnkparser --timestamps file.lnk`
+```plaintext
+$ ./lnkparser --timestamps file.lnk
+```
 
 To display all available data and write the output to a CSV file:
-`$ ./lnkparser -a file.lnk -o lnk_data.csv`
+```plaintext
+$ ./lnkparser -a file.lnk -o lnk_data.csv
+```
 
 Display brief information about the LNK structure
-`$ ./lnkparser -m`
+```plaintext
+$ ./lnkparser -m
+```
 
 ## CHANGELOG:
 * v0.10 (2021-03-26):  Core code written, pseudo-code for parsing functions written
