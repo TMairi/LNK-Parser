@@ -73,6 +73,8 @@ $  ./lnkparser -m
 * v0.25 (2021-03-28):  Added an output data option with CSV support, tested and working as it should
 * v0.30 (2021-03-28):  Several parsing issues fixed, v0.3 of the experimental script now achieves all intended functionality without issue
 * v0.31 (2021-04-08):  Hotfix for file deletion output error. Also changed the name of the output file to be more unique
+* v0.32 (2021-09-30):  Hotfix for handling LNK files which include spaces in the file name. Reported by NeutralKaon (Thanks!)
+
 
 ## KNOWN ISSUES / FUTURE CHANGES:
 
