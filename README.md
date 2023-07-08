@@ -34,9 +34,9 @@ $  ./lnkparser [-arg/--argument] [LNK FILE] [-o/--output] [OUTPUT FILE]
 * `-h`, `--help`:       Display help information and exit
 * `-m`, `--manual`:     Display information about LNK files and their structure
         
-When using the `-o` parameter, the script will automatically detect whether to output the contents into CSV form by reading the output file extension. Therefore, to output in CSV format, please make sure your output file ends with either `.csv` or `.CSV`.
+When using the `-o` parameter, the script will automatically detect whether to output the contents into CSV form by reading the output file extension. Therefore, to output in CSV format, please make sure the output file ends with either `.csv` or `.CSV`.
 
-You can also write the output of multiple arguments to the same output file as this script is set to append data rather than write to a new file.
+It is also possible to write the output of multiple arguments to the same output file as this script is set to append data, rather than write to a new file.
 
 ## EXAMPLES
 
@@ -75,7 +75,6 @@ $  ./lnkparser -m
 * v0.30 (2021-03-28):  Several parsing issues fixed, v0.3 of the experimental script now achieves all intended functionality without issue
 * v0.31 (2021-04-08):  Hotfix for file deletion output error. Also changed the name of the output file to be more unique
 * v0.32 (2021-09-30):  Hotfix for handling LNK files which include spaces in the file name. Reported by NeutralKaon (Thanks!)
-
 
 ## KNOWN ISSUES:
 
