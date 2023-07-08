@@ -1,13 +1,14 @@
 # LNK-Parser
 
+An experimental BASH script designed to parse out the contents of data structures found in Windows shortcut (LNK) files.
+
 ## ABOUT
-An experimental BASH script which parses out the contents of the data structures found in Windows shortcut (LNK) files.
 
-As a former forensic analyst who primarily used Linux for dissecting files and investigating data, I found that there was a lack of tools available on Linux which would parse a very common artifact of user activity: LNK shortcut files. To remedy this, I decided to create this BASH script, which carves out and parses the data structures associated with LNK files. One of my design goals for this script was to ensure that it could work on most default Linux distributions, meaning there is no over-reliance on unique tools you need to have pre-installed. 
+This is a relatively simple (*experimental*) BASH script which carves out and parses the data structures associated with LNK files. One of the design goals for this script was to ensure that it could work on most default Linux distributions, meaning there is no over-reliance on unique tools.
 
-To this end, the script primarily takes advantage of the `xxd` tool to seek and carve out the LNK data structures. LNK files are (for the most part) well-documented by Microsoft, and you can find this documentation [here](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink).
+To this end, the script primarily takes advantage of the `xxd` tool to seek and carve out the LNK data structures. LNK files are (for the most part) well-documented by Microsoft, which can be found [here](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink).
 
-To test the functionality of this script, I used over 200 varying LNK files I had stored across numerous HDDs containing Windows Operating Systems ranging from XP to 10. Please be aware that this script may encounter parsing errors if the input LNK file is corrupted or the data structures are missing.
+To test the functionality of this script, over 200 LNK file samples were used, which were generated from various Windows Operating Systems ranging from XP to 10. Please be aware that this script may encounter parsing errors if the input LNK file is corrupted or the data structures are missing.
 
 ## USAGE
 ```shell
@@ -78,5 +79,5 @@ $  ./lnkparser -m
 
 ## KNOWN ISSUES:
 
-* There are no in-depth parsers for network share-related data yet.
-* The BASH script does not handle unicode characters well, this needs more testing.
+* The BASH script does not handle unicode characters well.
+* There are no in-depth parsers for network share-related data.
