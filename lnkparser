@@ -7,29 +7,6 @@
 ##	An experimental BASH script which parses out the contents of the data structures found in 
 ##	Windows shortcut (LNK) files. 
 ##
-## AUTHOR NOTES:
-## -------------
-##	As a forensic analyst who primarily uses Linux for dissecting files and investigating data,
-##	I found that there was a lack of tools available on Linux which would parse a very common 
-##	artifact of user activity: LNK shortcut files.
-##
-##	To remedy this, I decided to create this BASH script, which works at the hexadecimal level
-##	to carve out and parse the data structures of LNK files. One of my design goals for this 
-##	script was to ensure that it could work on most default Linux distributions, meaning there is
-##	no over-reliance on unique tools you need to have pre-installed. 
-##
-##	To this end, the script primarily takes advantage of the 'xxd' tool to seek and carve out
-##	the LNK data structures. You can review the script below to see exactly how this data is 
-##	stored and how it can be parsed using standard commands such as `awk` and 'sed'.
-##
-##	LNK files are (for the most part) well-documented by Microsoft, and you can find this 
-##	documentation here: https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink
-##
-##	To test the functionality of this script, I used over 200 varying LNK files I had stored on
-##	numerous HDDs containing Windows Operating Systems ranging from XP to 10. Please be aware
-##	that this script may encounter parsing errors if the input LNK file is corrupted or the data
-##	structures are missing.
-##
 ## CHANGELOG:
 ## ----------
 ##	-- v0.10 (2021-03-26):	Core code written, pseudo-code for parsing functions written
@@ -55,16 +32,6 @@
 ##				output file to be more unique
 ##	-- v0.32 (2021-09-30):	Hotfix for handling LNK files which include spaces in the file 
 ##				name. Reported by NeutralKaon (Thanks!)
-##
-## KNOWN ISSUES / FUTURE CHANGES:
-## ------------------------------
-##	This BASH script needs more testing on Network Share LNK files. The single sample I had
-##	for a network share had a corrupt/missing LNK file structure. Therefore, there are no
-##	in-depth parsers for network share-related data yet.
-##
-##	The BASH script does not handle unicode characters well, this needs more testing.
-##
-##	Some of the more targeted scripts could do with streamlining.
 ##
 
 ###########################################################################################
